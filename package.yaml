@@ -1,0 +1,57 @@
+name: g2llery
+version: '0.1.0.0'
+author: Markus Läll
+maintainer: markus.l2ll@gmail.com
+license: GPL-2
+
+github: eyeinsky/g2llery
+
+dependencies:
+- base
+- rapid
+- warp
+- warp-tls
+- web
+
+executable:
+  main: Main.hs
+  source-dirs: src
+
+default-extensions:
+- Arrows
+- BangPatterns
+- ConstraintKinds
+- DataKinds
+- DefaultSignatures
+- DeriveDataTypeable
+- DeriveFunctor
+- DeriveGeneric
+- DerivingStrategies
+- EmptyDataDecls
+- ExtendedDefaultRules
+- FlexibleContexts
+- FlexibleInstances
+- FunctionalDependencies
+- GADTs
+- InstanceSigs
+- KindSignatures
+- LambdaCase
+- MultiParamTypeClasses
+- NamedFieldPuns
+- NoImplicitPrelude
+- NoMonomorphismRestriction
+- OverloadedStrings
+- PolyKinds
+- QuasiQuotes
+- RankNTypes
+- RecursiveDo
+- ScopedTypeVariables
+- StandaloneDeriving
+- TemplateHaskell
+- TupleSections
+- TypeApplications
+- TypeFamilies
+- TypeInType
+- TypeOperators
+- TypeSynonymInstances
+- UndecidableInstances
