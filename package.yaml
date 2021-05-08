@@ -11,7 +11,10 @@ dependencies:
 - rapid
 - warp
 - warp-tls
+- web-url
 - web
+- optparse-applicative
+- directory
 
 executable:
   main: Main.hs
