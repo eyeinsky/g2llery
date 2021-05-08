@@ -1,0 +1,10 @@
+* g2llery
+
+The photo gällery.
+
+** Develop
+
+# +begin_src
+bash dev/init.sh
+nix-shell --command 'cabal repl'
+#+end_src

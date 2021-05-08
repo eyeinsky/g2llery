@@ -1,0 +1,8 @@
+--- shell.nix	2021-05-09 01:23:22.127762268 +0300
++++ new.nix	2021-05-09 01:10:31.837015534 +0300
+@@ -1,4 +1,4 @@
+-{ nixpkgs ? import <nixpkgs> {}, compiler ? "default", doBenchmark ? false }:
++{ nixpkgs ? import <nixpkgs> { config = import ./dev/dependencies.nix; }, compiler ? "default", doBenchmark ? false }:
+ 
+ let
+ 
