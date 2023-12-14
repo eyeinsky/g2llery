@@ -1,4 +1,4 @@
-cabal-version: 1.12
+cabal-version: 3.4
 
 name:           g2llery
 version:        0.1.0.0
@@ -6,7 +6,7 @@ homepage:       https://github.com/eyeinsky/g2llery#readme
 bug-reports:    https://github.com/eyeinsky/g2llery/issues
 author:         Markus Läll
 maintainer:     markus.l2ll@gmail.com
-license:        GPL-2
+license:        BSD-3-Clause
 build-type:     Simple
 
 source-repository head
@@ -22,8 +22,14 @@ executable g2llery
     , directory
     , optparse-applicative
     , rapid
+    , servant-server
+    , threatlevel-common
+    , threatlevel-unsorted
+    , threatlevel-url
+    , threatlevel-web
     , warp
     , warp-tls
-    , web
-    , web-url
   default-language: GHC2021
+  default-extensions:
+    ImportQualifiedPost
+    StandaloneDeriving

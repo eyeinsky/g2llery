@@ -1,3 +1,5 @@
+stack.yaml.local*
+
 dist
 dist-*
 cabal-dev

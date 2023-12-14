@@ -1,0 +1,20 @@
+packages: .
+
+source-repository-package
+    type: git
+    location: https://github.com/eyeinsky/threatlevel
+    tag: 2212ac7007bb988819a504b1486a8a5be32b1e48
+    subdir:
+      threatlevel-web
+      threatlevel-url
+      threatlevel-js
+      threatlevel-css
+      threatlevel-common
+      threatlevel-unsorted
+      identifiers
+      render
+
+source-repository-package
+    type: git
+    location: https://github.com/eyeinsky/fixedlist
+    tag: 81073e150099aa4d42029f432888abe13db406d6
