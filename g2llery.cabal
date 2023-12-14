@@ -29,6 +29,7 @@ executable g2llery
     , threatlevel-web
     , warp
     , warp-tls
+    , http-media
   default-language: GHC2021
   default-extensions:
     ImportQualifiedPost
