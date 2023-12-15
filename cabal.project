@@ -18,3 +18,8 @@ source-repository-package
     type: git
     location: https://github.com/eyeinsky/fixedlist
     tag: 81073e150099aa4d42029f432888abe13db406d6
+
+source-repository-package
+    type: git
+    location: https://github.com/eyeinsky/corrosion
+    -- tag: 2212ac7007bb988819a504b1486a8a5be32b1e48

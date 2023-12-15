@@ -34,6 +34,10 @@ import HTML qualified
 import Web.DSL qualified
 import Web hiding (port, url)
 
+import Corrosion qualified as C
+import Streaming.Prelude qualified as S
+
+
 -- * CLI
 
 data Options = Options
@@ -57,18 +61,27 @@ type Site
   :<|> "api" :> "browse" :> QueryParam "path" FilePath :> Get '[JSON] [Either FilePath FilePath]
   :<|> "stub" :> Get '[JSON] ()
 
-app :: Server Site
-app = home :<|> browse :<|> stub
+-- server :: Server Site
+server = home :<|> browse :<|> stub
   where
-    home :: Handler (Web Html)
-    home = return $ do
-      return $ do
-        h1 "Gälleri :)"
+    home :: AppM (Web Html)
+    home = do
+      Env root <- ask
 
-    browse :: Maybe FilePath -> Handler [Either FilePath FilePath]
+      FolderListing self content <- liftIO $ getFolderListing root
+
+      C.ls' root & S.effects & liftIO
+
+      return $ do
+        return $ do
+          h1 "Gälleri :)"
+          ul $ forM_ content $ \p -> do
+            li $ a ! HTML.href "" $ toHtml p
+
+    browse :: Maybe FilePath -> AppM [Either FilePath FilePath]
     browse maybePath = return []
 
-    stub :: Handler ()
+    stub :: AppM ()
     stub = return ()
 
 instance Accept Html where
@@ -79,15 +92,20 @@ instance MimeRender Html (Web Html) where
 
 -- * Site
 
-site :: Wai.Application
-site = serve (Proxy @Site) app
+data Env = Env FilePath
+type AppM = ReaderT Env Handler
+
+app :: Env -> Wai.Application
+app env = serve api $ hoistServer api (\x -> runReaderT x env) server
+  where
+    api = Proxy @Site
 
 main :: IO ()
 main = do
   Options{rootPath, port, url, verbose} <- O.execParser (O.info opts O.idm)
   maybeTls <- tlsSettingsEnv "DEV_WEBSERVER_CERT" "WEBSERVER_KEY"
   let settings = Warp.setPort (fromIntegral port) Warp.defaultSettings
-  (maybe Warp.runSettings Warp.runTLS maybeTls) settings site
+  (maybe Warp.runSettings Warp.runTLS maybeTls) settings (app $ Env rootPath)
 
 data FolderListing = FolderListing
   { folderListingPath :: FilePath
