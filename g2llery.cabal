@@ -15,22 +15,36 @@ source-repository head
 
 executable g2llery
   main-is: Main.hs
-  other-modules: Paths_g2llery
+  other-modules: Paths_g2llery, Orphans
   hs-source-dirs: src
   build-depends:
       base
+    , aeson
+    , async
+    , corrosion
+    , containers
     , directory
+    , http-media
+    , mtl
     , optparse-applicative
     , rapid
     , servant-server
+    , streaming
+    , text
     , threatlevel-common
+    , threatlevel-css
+    , threatlevel-js
     , threatlevel-unsorted
     , threatlevel-url
     , threatlevel-web
+    , wai
     , warp
     , warp-tls
-    , http-media
+    , filepath
   default-language: GHC2021
   default-extensions:
     ImportQualifiedPost
     StandaloneDeriving
+    LambdaCase
+    DataKinds
+    OverloadedStrings

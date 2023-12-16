@@ -3,7 +3,7 @@ packages: .
 source-repository-package
     type: git
     location: https://github.com/eyeinsky/threatlevel
-    tag: 2212ac7007bb988819a504b1486a8a5be32b1e48
+    tag: a0f2f5d5dd9f311f42eda9c2709f56a66092b266
     subdir:
       threatlevel-web
       threatlevel-url
@@ -22,4 +22,4 @@ source-repository-package
 source-repository-package
     type: git
     location: https://github.com/eyeinsky/corrosion
-    -- tag: 2212ac7007bb988819a504b1486a8a5be32b1e48
+    tag: 1b419a4b375cd4c409d5ffc19b5d3776fd08bf86
