@@ -4,6 +4,8 @@
 
 module Main where
 
+import Data.List qualified as L
+import Data.Text qualified as TS
 import Data.Text.Lazy.Encoding qualified as TL
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Handler.WarpTLS qualified as Warp
@@ -12,6 +14,7 @@ import Rapid qualified
 import System.IO
 import System.Directory
 import Network.HTTP.Media ((//), (/:))
+import Control.Monad.Except
 
 import Options.Applicative qualified as O
 
@@ -32,7 +35,8 @@ import CSS qualified
 import JS qualified
 import HTML qualified
 import Web.DSL qualified
-import Web hiding (port, url)
+import Web hiding (port, url, root, baseUrl)
+import URL qualified
 
 import Corrosion qualified as C
 import Streaming.Prelude qualified as S
@@ -43,7 +47,7 @@ import Streaming.Prelude qualified as S
 data Options = Options
   { rootPath :: FilePath
   , port :: Port
-  , url :: String
+  , urlText :: TS.Text
   , verbose :: Bool
   } deriving (Show)
 
@@ -56,30 +60,32 @@ opts = Options
 
 -- * API
 
-type Site
-  = Get '[Html] (Web Html)
-  :<|> "api" :> "browse" :> QueryParam "path" FilePath :> Get '[JSON] [Either FilePath FilePath]
+type API
+  = QueryParam "path" FilePath :> Get '[Html] (Web Html)
   :<|> "stub" :> Get '[JSON] ()
 
--- server :: Server Site
-server = home :<|> browse :<|> stub
+server :: ServerT API AppM
+server = browse :<|> stub
   where
-    home :: AppM (Web Html)
-    home = do
-      Env root <- ask
+    browse :: Maybe FilePath -> AppM (Web Html)
+    browse maybePath = do
+      Env{root, baseUrl} <- ask
 
-      FolderListing self content <- liftIO $ getFolderListing root
+      let fsPath = maybe root (\p -> root <> "/" <> p) maybePath
 
-      C.ls' root & S.effects & liftIO
+      dirsFiles <- liftIO $ S.toList_ $ C.ls' fsPath
+      let dirsFiles' = map (bimap dropDotSlash dropDotSlash) dirsFiles :: [C.DirOrFilePath]
 
       return $ do
         return $ do
           h1 "Gälleri :)"
-          ul $ forM_ content $ \p -> do
-            li $ a ! HTML.href "" $ toHtml p
-
-    browse :: Maybe FilePath -> AppM [Either FilePath FilePath]
-    browse maybePath = return []
+          ul $ forM_ dirsFiles' $ \case
+            Left dirName -> let
+              newPath = TS.pack dirName
+              in li $ do
+              a ! href (baseUrl & param "path" newPath) $ toHtml $ dirName <> "/"
+              toHtml "[dir]"
+            Right file -> li $ a ! HTML.href "" $ toHtml $ file
 
     stub :: AppM ()
     stub = return ()
@@ -92,30 +98,30 @@ instance MimeRender Html (Web Html) where
 
 -- * Site
 
-data Env = Env FilePath
+data Env = Env
+  { root :: FilePath
+  , baseUrl :: URL
+  }
 type AppM = ReaderT Env Handler
 
 app :: Env -> Wai.Application
-app env = serve api $ hoistServer api (\x -> runReaderT x env) server
-  where
-    api = Proxy @Site
+app env = serve api $ hoistServer api (flip runReaderT env) server
+  where api = Proxy @API
 
 main :: IO ()
 main = do
-  Options{rootPath, port, url, verbose} <- O.execParser (O.info opts O.idm)
+  Options{rootPath, port, urlText, verbose} <- O.execParser (O.info opts O.idm)
+  baseUrl <- liftEither $ either (Left . userError) Right $ URL.parse urlText
+  print baseUrl
   maybeTls <- tlsSettingsEnv "DEV_WEBSERVER_CERT" "WEBSERVER_KEY"
   let settings = Warp.setPort (fromIntegral port) Warp.defaultSettings
-  (maybe Warp.runSettings Warp.runTLS maybeTls) settings (app $ Env rootPath)
+  (maybe Warp.runSettings Warp.runTLS maybeTls) settings (app $ Env rootPath baseUrl)
 
-data FolderListing = FolderListing
-  { folderListingPath :: FilePath
-  , folderListingContents :: [FilePath]
-  }
+-- * Helpers
 
-getFolderListing :: FilePath -> IO FolderListing
-getFolderListing path = do
-  list <- listDirectory path
-  return $ FolderListing path list
+-- | Drop "./" from a string
+dropDotSlash :: String -> String
+dropDotSlash xs = fromMaybe xs $ L.stripPrefix "./" xs
 
 -- * Hot reload
 
