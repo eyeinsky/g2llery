@@ -110,7 +110,7 @@ server = browse :<|> stub
       dirsFiles <- liftIO $ C.lsPrim fsPath
       let dirsFiles' = map (bimap C.dropDotSlash C.dropDotSlash) dirsFiles :: [C.DirOrFilePath]
           (dirs, files') = C.partitionEithers dirsFiles'
-          files = mapMaybe ensureImage files'
+          files = mapMaybe (ensureImage imageExtensions) files'
 
       let addCurrentPath p = maybe p (\currentPath -> currentPath <> "/" <> p) maybePath
 
@@ -130,6 +130,11 @@ server = browse :<|> stub
 
     stub :: AppM ()
     stub = return ()
+
+-- | This depends on what (1) <img> HTML element supports, and what
+-- (2) ImageMagik's `convert` supports.
+imageExtensions :: [FilePath]
+imageExtensions = [".jpg", ".png"]
 
 -- * Site
 
@@ -182,7 +187,7 @@ runApp cmd = do
       logPrint "overwrite" overwrite
 
       C.lsRecursive2 root_
-        & filterJpg
+        & filterExt imageExtensions
         & exclude ".git/"
         & if dryRun
           then S.mapM_ resize
@@ -195,7 +200,10 @@ runApp cmd = do
         logPrint :: forall a . Show a => String -> a -> IO ()
         logPrint label a = log $ label <> ": " <> show a
 
-        thumbDir' = mkThumbDirRoot root_ maybeThumbDir :: FilePath
+        thumbDir' :: FilePath
+        thumbDir' = mkThumbDirRoot root_ maybeThumbDir
+
+        thumbsParallel :: Int -> C.Shell_ FilePath -> IO ()
         thumbsParallel n source = source
           & S.chunksOf n
           & S.mapped S.toList
@@ -207,13 +215,17 @@ runApp cmd = do
         resize :: FilePath -> IO ()
         resize path = if dryRun
           then do
-            log $ callProcess' False mkdir
-            log $ callProcess' True convert
+            exists <- doesFileExist thumbFull
+            if exists
+              then return () -- logPrint "skipping" path
+              else do
+              log $ callProcess' False mkdir
+              log $ callProcess' True convert
           else do
             callProcess_ mkdir
             exists <- doesFileExist thumbFull
             C.pwd >>= logPrint "pwd"
-            C.readShell "pwd" >>= logPrint "read shell pwd: "
+            C.readShell "pwd" >>= logPrint "read shell pwd"
             C.timePrintPrim (\time -> logPrint "convert took" (show time)) $ if overwrite
               then callProcess_ convert
               else if exists
@@ -246,13 +258,14 @@ fullUrl url relativePath = url & (segments <>~ "full" : map TS.pack (split (== '
 exclude :: FilePath -> C.Shell_ FilePath -> C.Shell_ FilePath
 exclude part = S.filter (\p -> P.not $ any (part `L.isInfixOf`) $ L.tails p)
 
-filterJpg  :: C.Shell_ C.DirOrFilePath -> C.Shell_ FilePath
-filterJpg = S.mapMaybe (either (\_ -> Nothing) ensureImage)
+-- | Filter files by case-insensitive file extensions.
+filterExt :: [FilePath] -> C.Shell_ C.DirOrFilePath -> C.Shell_ FilePath
+filterExt exts = S.mapMaybe (either (\_ -> Nothing) (ensureImage exts))
 
-ensureImage :: FilePath -> Maybe FilePath
-ensureImage path = let
+ensureImage :: [FilePath] -> FilePath -> Maybe FilePath
+ensureImage exts path = let
   path' = map C.toLower path
-  in if ".jpg" `L.isSuffixOf` path'
+  in if any (`L.isSuffixOf` path') exts
   then Just path
   else Nothing
 
