@@ -40,6 +40,7 @@ data Command
     , port :: Port
     , urlText :: TS.Text
     , verbose :: Bool
+    , whitelistPath :: Maybe FilePath
     }
   | Thumbs
     { root_ :: FilePath
@@ -68,6 +69,7 @@ mainCommand = O.subparser $ mempty
       <*> O.option O.auto (O.long "port" <> O.short 'p')
       <*> O.strOption (O.long "url")
       <*> pure False
+      <*> O.option (O.eitherReader (Right . Just)) (O.long "whitelist" <> O.value Nothing)
 
     thumbs :: O.Parser Command
     thumbs = Thumbs
@@ -78,7 +80,7 @@ mainCommand = O.subparser $ mempty
       <*> O.option O.auto (O.long "parallel" <> O.value 16)
 
 pathArgument :: O.Parser FilePath
-pathArgument = O.argument (O.eitherReader (Right . sanitizeRoot)) rootPathField
+pathArgument = O.argument (O.eitherReader (Right . dropSuffixSlash)) rootPathField
   where
     rootPathField
       = O.metavar "FILE"
@@ -103,27 +105,33 @@ server = browse :<|> stub
   where
     browse :: Maybe FilePath -> AppM (Web Html)
     browse maybePath = do
-      Env{root, baseUrl} <- ask
+      Env{root, baseUrl, maybeWhitelist} <- ask
 
       let fsPath = maybe root (\p -> root <> "/" <> p) maybePath
+          addCurrentPath p = maybe p (\currentPath -> currentPath <> "/" <> p) maybePath
 
-      dirsFiles <- liftIO $ C.lsPrim fsPath
-      let dirsFiles' = map (bimap C.dropDotSlash C.dropDotSlash) dirsFiles :: [C.DirOrFilePath]
-          (dirs, files') = C.partitionEithers dirsFiles'
-          files = mapMaybe (ensureImage imageExtensions) files'
+      (files, dirs) <- do
+        let pathAndName :: FilePath -> (FilePath, FilePath)
+            pathAndName p = (addCurrentPath p, p)
+            whitelisted = mkInWhitelist maybeWhitelist
 
-      let addCurrentPath p = maybe p (\currentPath -> currentPath <> "/" <> p) maybePath
+        dirsFiles0 <- liftIO (C.lsPrim fsPath)
+          <&> map (bimap C.dropDotSlash C.dropDotSlash)
+            ^ map (bimap pathAndName pathAndName)
+
+        let dirsFiles1 = filter (whitelisted . either fst fst) dirsFiles0
+            (dirs, files') = C.partitionEithers dirsFiles1
+            files = mapMaybe (\(path, name) -> (path,) <$> ensureImage imageExtensions name) files'
+        return (files, dirs)
+
 
       return $ do
         return $ do
           h1 $ a "Gälleri :)" ! href baseUrl
-          ul $ forM_ (L.sort dirs) $ \dirName -> let
-            newPath = TS.pack $ addCurrentPath dirName
-            in li $ do
-            a ! href (baseUrl & param "path" newPath) $ toHtml $ dirName <> "/"
+          ul $ forM_ (L.sort dirs) $ \(dirPath, dirName) ->
+            li $ a ! href (baseUrl & param "path" (TS.pack dirPath)) $ toHtml $ dirName <> "/"
 
-          forM_ files $ \fileName -> let
-            filePath = addCurrentPath fileName
+          forM_ files $ \(filePath, fileName) -> let
             thumb = thumbUrl baseUrl filePath
             full = fullUrl baseUrl filePath
             in a ! href full $ img (pure ()) ! src thumb ! Custom "loading" "lazy"
@@ -136,17 +144,28 @@ server = browse :<|> stub
 imageExtensions :: [FilePath]
 imageExtensions = [".jpg", ".png"]
 
+mkInWhitelist :: Maybe Whitelist -> FilePath -> Bool
+mkInWhitelist = \case
+  Just (Whitelist prefixes) -> let
+    prefixes' = map dropSuffixSlash prefixes -- just in case
+    in \path -> any (`L.isPrefixOf` path) prefixes'
+  Nothing -> \_ -> True
+
 -- * Site
 
 newtype Logs = Logs (IO.Chan String)
 instance Show Logs where
   show _ = "Logs"
 
+newtype Whitelist = Whitelist [FilePath]
+  deriving stock Show
+
 data Env = Env
   { root :: FilePath
   , thumbDir :: FilePath
   , baseUrl :: URL
   , logs :: Logs
+  , maybeWhitelist :: Maybe Whitelist
   } deriving (Show)
 type AppM = ReaderT Env Handler
 
@@ -163,13 +182,15 @@ runApp cmd = do
   _ <- IO.async $ forever $ IO.readChan chan >>= putStrLn
   let logs = Logs chan
   case cmd of
-    Web{root_, thumbnailsPath_, port, urlText} -> do
+    Web{root_, thumbnailsPath_, port, urlText, whitelistPath} -> do
       baseUrl <- liftEither $ either (Left . userError) Right $ URL.parse urlText
+      maybeWhitelist <- traverse (fmap (Whitelist . lines) . C.readFile) whitelistPath
+
       -- todo: sanitize thumbnailsPath_
       let
         root = root_
         thumbDir = mkThumbDirRoot root thumbnailsPath_
-        env = Env root thumbDir baseUrl logs
+        env = Env root thumbDir baseUrl logs maybeWhitelist
       print env
       C.labelPrint "port" port
 
@@ -297,8 +318,8 @@ callProcess' multiline (cmd, args) = concat' $ cmd : args
 split :: (Char -> Bool) -> String -> [String]
 split pred = map TL.unpack . filter (P.not . TL.null) . TL.split pred . TL.pack
 
-sanitizeRoot :: FilePath -> FilePath
-sanitizeRoot = reverse . dropWhile (== '/') . reverse
+dropSuffixSlash :: FilePath -> FilePath
+dropSuffixSlash = reverse . dropWhile (== '/') . reverse
 
 -- ** Streaming
 
@@ -315,6 +336,22 @@ unique = go mempty
 
 hot, stop :: IO ()
 hot = Rapid.rapid 0 $ \r -> do
-  Rapid.restart r ("webserver" :: String) main
+  Rapid.restart r ("main" :: String) main
 stop = Rapid.rapid 0 $ \r -> do
-  Rapid.stop r ("webserver" :: String) main
+  Rapid.stop r ("main" :: String) main
+
+-- hot, stop :: IO ()
+-- (hot, stop) = (hot', stop')
+--   where
+--     main' = runApp $ Web
+--       { root_ = "/mnt/samsung500/fotod"
+--       , thumbnailsPath_ = Just "/var/gallery/thumbs"
+--       , port = 8421
+--       , urlText = "https://gallery.yay"
+--       , verbose = False
+--       , whitelistPath = Just "/mnt/samsung500/fotod/pere-whitelist.txt"
+--       }
+--     hot' = Rapid.rapid 0 $ \r -> do
+--       Rapid.restart r ("runApp" :: String) main'
+--     stop' = Rapid.rapid 0 $ \r -> do
+--       Rapid.stop r ("runApp" :: String) main'
