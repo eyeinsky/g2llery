@@ -4,7 +4,8 @@
 
 module Main where
 
-import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.Async qualified as IO
+import Control.Concurrent qualified as IO
 import Control.Monad.Except
 import Data.Set qualified as Set
 import Data.List qualified as L
@@ -26,7 +27,7 @@ import Common.Prelude as P hiding (split)
 import Corrosion qualified as C
 import Server.Wai
 import URL qualified
-import Web hiding (port, url, root, baseUrl, split, resize)
+import Web hiding (port, url, root, baseUrl, split, resize, log)
 
 import Orphans ()
 
@@ -79,7 +80,11 @@ mainCommand = O.subparser $ mempty
 pathArgument :: O.Parser FilePath
 pathArgument = O.argument (O.eitherReader (Right . sanitizeRoot)) rootPathField
   where
-    rootPathField = O.metavar "FILE" <> O.help "Gallery root path" <> O.value "."
+    rootPathField
+      = O.metavar "FILE"
+      <> O.help "Gallery root path."
+      <> O.value "."
+      <> O.showDefault
 
 thumbDirOption :: O.Parser (Maybe FilePath)
 thumbDirOption = O.option thumbnailsParser thumbnailsField
@@ -128,10 +133,15 @@ server = browse :<|> stub
 
 -- * Site
 
+newtype Logs = Logs (IO.Chan String)
+instance Show Logs where
+  show _ = "Logs"
+
 data Env = Env
   { root :: FilePath
   , thumbDir :: FilePath
   , baseUrl :: URL
+  , logs :: Logs
   } deriving (Show)
 type AppM = ReaderT Env Handler
 
@@ -140,75 +150,86 @@ app env = serve api $ hoistServer api (flip runReaderT env) server
   where api = Proxy @API
 
 main :: IO ()
-main = O.execParser (O.info (O.helper <*> mainCommand) O.idm) >>= \case
-  Web{root_, thumbnailsPath_, port, urlText} -> do
-    baseUrl <- liftEither $ either (Left . userError) Right $ URL.parse urlText
-    -- todo: sanitize thumbnailsPath_
-    let
-      root = root_
-      thumbDir = mkThumbDirRoot root thumbnailsPath_
-      env = Env root thumbDir baseUrl
-    print env
-    C.labelPrint "port" port
+main = O.execParser (O.info (O.helper <*> mainCommand) O.idm) >>= runApp
 
-    maybeTls <- tlsSettingsEnv "DEV_WEBSERVER_CERT" "WEBSERVER_KEY"
-    print $ isJust maybeTls
-    let settings = Warp.setPort (fromIntegral port) Warp.defaultSettings
-    (maybe Warp.runSettings Warp.runTLS maybeTls) settings (app env)
+runApp :: Command -> IO ()
+runApp cmd = do
+  chan <- IO.newChan
+  _ <- IO.async $ forever $ IO.readChan chan >>= putStrLn
+  let logs = Logs chan
+  case cmd of
+    Web{root_, thumbnailsPath_, port, urlText} -> do
+      baseUrl <- liftEither $ either (Left . userError) Right $ URL.parse urlText
+      -- todo: sanitize thumbnailsPath_
+      let
+        root = root_
+        thumbDir = mkThumbDirRoot root thumbnailsPath_
+        env = Env root thumbDir baseUrl logs
+      print env
+      C.labelPrint "port" port
 
-  Thumbs{root_, maybeThumbDir, dryRun, overwrite, parallel} -> do
+      maybeTls <- tlsSettingsEnv "DEV_WEBSERVER_CERT" "WEBSERVER_KEY"
+      print $ isJust maybeTls
+      let settings = Warp.setPort (fromIntegral port) Warp.defaultSettings
+      (maybe Warp.runSettings Warp.runTLS maybeTls) settings (app env)
 
-    C.cd root_
-    C.pwd >>= C.labelPrint "pwd"
-    C.labelPrint "root" root_
-    C.labelPrint "thumbDir" thumbDir'
-    C.labelPrint "dryRun" dryRun
-    C.labelPrint "overwrite" overwrite
+    Thumbs{root_, maybeThumbDir, dryRun, overwrite, parallel} -> do
+      C.cd root_
+      C.pwd >>= C.labelPrint "pwd"
+      logPrint "root" root_
+      logPrint "thumbDir" thumbDir'
+      logPrint "dryRun" dryRun
+      logPrint "overwrite" overwrite
 
-    C.lsRecursive2 root_
-      & filterJpg
-      & exclude ".git/"
-      & if dryRun
-        then S.mapM_ resize'
-        else thumbsParallel parallel
+      C.lsRecursive2 root_
+        & filterJpg
+        & exclude ".git/"
+        & if dryRun
+          then S.mapM_ resize
+          else thumbsParallel parallel
 
-    where
-      thumbDir' = mkThumbDirRoot root_ maybeThumbDir :: FilePath
-      resize' path = resize dryRun overwrite thumbDir' path
-      thumbsParallel n source = source
-        & S.chunksOf n
-        & S.mapped S.toList
-        & S.mapM_ (\paths -> do
-                      liftIO $ Async.mapConcurrently_ resize' paths
-                      mapM_ (putStrLn . ("done: " <>)) paths
-                  )
+      where
+        log :: String -> IO ()
+        log msg = IO.writeChan chan msg
 
-  ListFileTypes{root_} -> C.lsRecursive2 root_
-    & S.mapMaybe (either (\_ -> Nothing) (Just . takeExtension))
-    & unique
-    & S.mapM_ putStrLn
+        logPrint :: forall a . Show a => String -> a -> IO ()
+        logPrint label a = log $ label <> ": " <> show a
+
+        thumbDir' = mkThumbDirRoot root_ maybeThumbDir :: FilePath
+        thumbsParallel n source = source
+          & S.chunksOf n
+          & S.mapped S.toList
+          & S.mapM_ (\paths -> do
+                        liftIO $ IO.mapConcurrently_ resize paths
+                        mapM_ (logPrint "done") paths
+                    )
+
+        resize :: FilePath -> IO ()
+        resize path = if dryRun
+          then do
+            log $ callProcess' False mkdir
+            log $ callProcess' True convert
+          else do
+            callProcess_ mkdir
+            exists <- doesFileExist thumbFull
+            C.pwd >>= logPrint "pwd"
+            C.readShell "pwd" >>= logPrint "read shell pwd: "
+            C.timePrintPrim (\time -> logPrint "convert took" (show time)) $ if overwrite
+              then callProcess_ convert
+              else if exists
+                   then logPrint "exists" thumbFull
+                   else callProcess_ convert
+          where
+            (thumbDirname, thumbFull) = thumbDirPath thumbDir' path
+            mkdir = ("mkdir", ["-p", thumbDirname])
+            convert = (convertPath, [path, "-resize", "500x500>", thumbFull])
+
+    ListFileTypes{root_} -> C.lsRecursive2 root_
+      & S.mapMaybe (either (\_ -> Nothing) (Just . takeExtension))
+      & unique
+      & S.mapM_ putStrLn
 
 -- * Thumbnails
-
-resize :: Bool -> Bool -> FilePath -> FilePath -> IO ()
-resize dryRun overwrite thumbDir path = if dryRun
-  then do
-    callProcess' False mkdir
-    callProcess' True convert
-  else do
-    callProcess_ mkdir
-    exists <- doesFileExist thumbFull
-    C.pwd >>= C.labelPrint "# pwd: "
-    C.readShell "pwd" >>= C.labelPrint "# read shell pwd: "
-    C.timePrint "convert" $ if overwrite
-      then callProcess_ convert
-      else if exists
-           then putStrLn $ "exists: " <> thumbFull
-           else callProcess_ convert
-  where
-    (thumbDirname, thumbFull) = thumbDirPath thumbDir path
-    mkdir = ("mkdir", ["-p", thumbDirname])
-    convert = (convertPath, [path, "-resize", "500x500>", thumbFull])
 
 convertPath :: FilePath
 convertPath = "convert"
@@ -251,8 +272,8 @@ type Cmd = (FilePath, [String])
 callProcess_ :: Cmd -> IO ()
 callProcess_ (cmd, args) = C.callProcess cmd args
 
-callProcess' :: MonadIO m => Bool -> Cmd -> m ()
-callProcess' multiline (cmd, args) = liftIO $ putStrLn $ concat' $ cmd : args
+callProcess' :: Bool -> Cmd -> String
+callProcess' multiline (cmd, args) = concat' $ cmd : args
   where
     concat' = if multiline
       then L.intercalate " \\\n\t"
